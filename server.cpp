@@ -1,9 +1,17 @@
 #include <stdlib.h>
 #include <iostream>
 #include <string>
-#include "fcgio.h"
+#include <sstream>
+#include <fcgio.h>
+#include <libpq-fe.h>
+#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/json_parser.hpp>
 
 using namespace std;
+
+using boost::property_tree::ptree;
+using boost::property_tree::read_json;
+using boost::property_tree::write_json;
 
 // Maximum bytes
 const unsigned long STDIN_MAX = 1000000;
@@ -19,9 +27,9 @@ string get_request_content(const FCGX_Request & request) {
     if (content_length_str) {
         content_length = strtol(content_length_str, &content_length_str, 10);
         if (*content_length_str) {
-            cerr << "Can't Parse 'CONTENT_LENGTH='"
+          cerr << "Can't Parse 'CONTENT_LENGTH='"
                  << FCGX_GetParam("CONTENT_LENGTH", request.envp)
-                 << "'. Consuming stdin up to " << STDIN_MAX << endl;
+                 << "'. Consuming stdin up to " << STDIN_MAX << '\n';
         }
 
         if (content_length > STDIN_MAX) {
@@ -48,52 +56,71 @@ string get_request_content(const FCGX_Request & request) {
     return content;
 }
 
+static string get_response(const string & uri, const string & method, const string & contents) {
+  ptree pt;
+
+  PGconn *conn = PQconnectdb("user=sd_ventures dbname=sd_ventures_development hostaddr=127.0.0.1 port=5432");
+  if (PQstatus(conn) != CONNECTION_OK) {
+    pt.put("error", "failed to get connection");
+  } else {
+    PGresult *res = PQexec(conn, "SELECT * FROM devices");
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+      pt.put("error", "failed to get devices");
+    } else {
+      int nFields = PQnfields(res);
+      int nRows = PQntuples(res);
+      for (int i = 0; i < nRows; i++) {
+        ptree row;
+        for (int j = 0; j < nFields; j++) {
+          row.put(PQfname(res, j), PQgetvalue(res, i, j));
+        }
+        pt.push_back(make_pair("", row));
+      }
+    }
+    PQclear(res);
+  }
+
+  PQfinish(conn);
+  ostringstream ss;
+  write_json(ss, pt);
+  return ss.str();
+}
+
+
 int main(void) {
     // Backup the stdio streambufs
-    streambuf * cin_streambuf  = cin.rdbuf();
-    streambuf * cout_streambuf = cout.rdbuf();
-    streambuf * cerr_streambuf = cerr.rdbuf();
+  streambuf * cin_streambuf  = cin.rdbuf();
+  streambuf * cout_streambuf = cout.rdbuf();
+  streambuf * cerr_streambuf = cerr.rdbuf();
 
-    FCGX_Request request;
+  FCGX_Request request;
 
-    FCGX_Init();
-    FCGX_InitRequest(&request, 0, 0);
+  FCGX_Init();
+  FCGX_InitRequest(&request, 0, 0);
 
-    while (FCGX_Accept_r(&request) == 0) {
-        fcgi_streambuf cin_fcgi_streambuf(request.in);
-        fcgi_streambuf cout_fcgi_streambuf(request.out);
-        fcgi_streambuf cerr_fcgi_streambuf(request.err);
+  while (FCGX_Accept_r(&request) == 0) {
+      fcgi_streambuf cin_fcgi_streambuf(request.in);
+      fcgi_streambuf cout_fcgi_streambuf(request.out);
+      fcgi_streambuf cerr_fcgi_streambuf(request.err);
 
-        cin.rdbuf(&cin_fcgi_streambuf);
-        cout.rdbuf(&cout_fcgi_streambuf);
-        cerr.rdbuf(&cerr_fcgi_streambuf);
+      cin.rdbuf(&cin_fcgi_streambuf);
+      cout.rdbuf(&cout_fcgi_streambuf);
+      cerr.rdbuf(&cerr_fcgi_streambuf);
 
-        const char * uri = FCGX_GetParam("REQUEST_URI", request.envp);
+      string uri = FCGX_GetParam("REQUEST_URI", request.envp);
+      string method = FCGX_GetParam("REQUEST_METHOD", request.envp);
+      string contents = get_request_content(request);
 
-        string content = get_request_content(request);
+      string response = get_response(uri, method, contents);
 
-        if (content.length() == 0) {
-            content = ", World!";
-        }
+      cout << "Content-type: application/json\r\n" << response << '\n';
+      // Note: the fcgi_streambuf destructor will auto flush
+  }
 
-        cout << "Content-type: text/html\r\n"
-             << "\r\n"
-             << "<html>\n"
-             << "  <head>\n"
-             << "    <title>Hello, World!</title>\n"
-             << "  </head>\n"
-             << "  <body>\n"
-             << "    <h1>Hello " << content << " from " << uri << " !</h1>\n"
-             << "  </body>\n"
-             << "</html>\n";
+  // restore stdio streambufs
+  cin.rdbuf(cin_streambuf);
+  cout.rdbuf(cout_streambuf);
+  cerr.rdbuf(cerr_streambuf);
 
-        // Note: the fcgi_streambuf destructor will auto flush
-    }
-
-    // restore stdio streambufs
-    cin.rdbuf(cin_streambuf);
-    cout.rdbuf(cout_streambuf);
-    cerr.rdbuf(cerr_streambuf);
-
-    return 0;
+  return 0;
 }

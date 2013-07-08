@@ -4,14 +4,14 @@ Device readings web application using C++ and Boost.
 
 ## Requirements
 
-Boost >= 1.53 & CMake >= 2.8. Use following commands to configure & build examples:
-```
-mkdir build
-cd build
-cmake ..
-make
-```
+Boost >= 1.53.
 
+## Build
+
+Use following commands to configure & build the application:
+```
+c++ -o cppreadings ../server.cpp -lfcgi -lfcgi++ -lpq -std=c++11
+```
 Run the fastcgi handler:
 ```
 spawn-fcgi -p 8000 -n build/cppreadings
@@ -33,4 +33,3 @@ Reload nginx config:
 ```
 nginx -s reload
 ```
-
